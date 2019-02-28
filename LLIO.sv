@@ -104,8 +104,10 @@ module LLIO
 (
 	input         CLK_50M,
 	input         ENABLE,        // If 0, module will be disabled and pins will be set to Z
-	inout         IO_LATCH,      // TX/D- top level IO pin
-	inout         IO_DATA,       // RX/D+ top level IO pin
+	input         IO_LATCH_IN,   // TX/D- top level IO pin
+	output        IO_LATCH_OUT,
+	input         IO_DATA_IN,    // RX/D+ top level IO pin
+	output        IO_DATA_OUT,
 	input         LLIO_SYNC,     // Pos edge corresponds with when the core needs the data, from core
 	output        LLIO_EN,       // High when device is communicating, passed to core
 	output [7:0]  LLIO_TYPE,     // Enumerated controller type, passed to core
@@ -113,54 +115,61 @@ module LLIO
 	output [47:0] LLIO_ANALOG    // Unsigned 8 bit vector of analog axis, passed to core
 );
 
-assign LLIO_TYPE = lljs_type;
-assign LLIO_BUTTONS = lljs_buttons;
-assign LLIO_ANALOG = lljs_analog;
-assign LLIO_EN = enable;
-
 // Commands
-localparam LLIO_POLL               = 32'h00; // Holds latch low until done
-localparam LLIO_STATUS             = 32'h01; // Returns 13 bytes, see above
-localparam LLIO_PRESSURE_STATUS    = 32'h02; // Returns ?? bytes
-localparam LLIO_SET_MODES          =  8'h2F;
-localparam LLIO_GET_MODES          = 32'h3F; // Returns bit field of active modes, 1 byte. see above
-// Rumble
-localparam LLIO_RUMBLE_CONST_START_FROM_PARMS = 32'h11; //must set parms first
-localparam LLIO_RUBMLE_CONST_END              = 32'h12;
-localparam LLIO_RUMBLE_SINE_START_FROM_PARMS  = 32'h14; //must set parms first
-localparam LLIO_RUMBLE_SINE_END               = 32'h18;
-localparam LLIO_RUMBLE_CONST_JOLT             = 32'h1A;
-localparam LLIO_RUMBLE_SINE_JOLT              = 32'h1B;
-localparam LLIO_RUMBLE_PARMS                  = 32'h1C; //followed by 2 bytes of data containing the parms (rumbleLevel and then rumbleLoop)
+enum bit [7:0] {
+	LLIO_POLL               = 8'h00, // Holds latch low until done
+	LLIO_STATUS             = 8'h01, // Returns 13 bytes, see above
+	LLIO_PRESSURE_STATUS    = 8'h02, // Returns ?? bytes
+	LLIO_SET_MODES          = 8'h20, // Requires 1 byte payload
+	LLIO_GET_MODES          = 8'h21, // Returns bit field of active modes, 1 byte. see above
+	// Rumble
+	LLIO_RUMBLE_CONST_START_FROM_PARMS = 8'h11, //must set parms first
+	LLIO_RUBMLE_CONST_END              = 8'h12,
+	LLIO_RUMBLE_SINE_START_FROM_PARMS  = 8'h14, //must set parms first
+	LLIO_RUMBLE_SINE_END               = 8'h18,
+	LLIO_RUMBLE_CONST_JOLT             = 8'h1A,
+	LLIO_RUMBLE_SINE_JOLT              = 8'h1B,
+	LLIO_RUMBLE_PARMS                  = 8'h1C //followed by 2 bytes of data containing the parms (rumbleLevel and then rumbleLoop)
+} commands;
+
 // Errors
-localparam LLIO_ERROR_NODATA       = 'h00;
-localparam LLIO_ERROR_AP_NO_REPORT = 'hFF;
-// States
-localparam STATE_IDLE        = 4'h0;
-localparam STATE_WRITE_START = 4'h1;
-localparam STATE_WRITE       = 4'h2;
-localparam STATE_WRITE_END   = 4'h3;
-localparam STATE_READ_START  = 4'h4;
-localparam STATE_READ_WAIT   = 4'h5;
-localparam STATE_READ        = 4'h6;
-localparam STATE_READ_END    = 4'h7;
-localparam STATE_POLL        = 4'h8;
-// Read types
-localparam READ_IDLE           = 3'h0;
-localparam READ_POLL           = 3'h1;
-localparam WRITE_STATUS        = 3'h2;
-localparam READ_STATUS         = 3'h3;
-localparam WRITE_SETUP         = 3'h4;
-localparam WRITE_MODES         = 3'h5;
-localparam READ_MODES          = 3'h6;
+enum bit [7:0] {
+	LLIO_ERROR_NODATA       = 8'h00,
+	LLIO_ERROR_AP_NO_REPORT = 8'hFF
+} errors;
+
 // Timing (one 50mhz cycle == 0.02us)
-localparam TIME_POLL   =  21'd820000; // 16.4ms - default polling period if no sync is used
-localparam TIME_SETTLE = 'd150;    // 3us - for bi-directional IO pins to settle
-localparam TIME_LEADIN = 'd75;     // 1.5us - at start of new transactions
-localparam TIME_BIT_H  = 'd110;    // 2.2us - always-high first bit-half
-localparam TIME_BIT_R  = 'd115;    // 2.3us - variable second bit-half
-localparam TIME_SYNC_H = 'd50;     // 1us - sync pulse between bytes high time
-localparam TIME_SYNC_L = 'd50;     // 1us - sync pulse between bytes low time
+enum bit [20:0] {
+	TIME_POLL   = 21'd820000, // 16.4ms - default polling period if no sync is used
+	TIME_SETTLE = 21'd150,    // 3us - to account for bidirectional IO pins slew rate
+	TIME_WAIT   = 21'd500,    // 10us - time to wait after a reply before writing again
+	TIME_LEADIN = 21'd84,     // 1.5us - at start of new transactions
+	TIME_BIT_H  = 21'd109,    // 2.2us - always-high first bit-half
+	TIME_BIT_R  = 21'd115,    // 2.3us - variable second bit-half
+	TIME_SYNC_H = 21'd49,     // 1us - sync pulse between bytes high time
+	TIME_SYNC_L = 21'd50      // 1us - sync pulse between bytes low time
+} time_periods;
+
+typedef enum bit [2:0] {
+	READ_IDLE,
+	READ_POLL,
+	WRITE_STATUS,
+	READ_STATUS,
+	WRITE_SETUP,
+	WRITE_MODES,
+	READ_MODES
+} execution_stage;
+
+typedef enum bit [3:0] {
+	STATE_IDLE,
+	STATE_WRITE_START,
+	STATE_WRITE,
+	STATE_WRITE_END,
+	STATE_READ_START,
+	STATE_READ_WAIT,
+	STATE_READ,
+	STATE_READ_END
+} execution_state;
 
 logic [20:0]  cycle, count, poll_offset, poll_counter, sync_counter;
 logic [31:0]  write_buffer;
@@ -175,38 +184,30 @@ logic [47:0]  lljs_analog;
 logic [7:0]   lljs_type;
 logic [7:0]   lljs_modes;
 
-reg   [2:0]   read_type = READ_IDLE;
-reg   [3:0]   state = STATE_IDLE;
 reg   [20:0]  poll_time = TIME_POLL;
 
-logic [1:0] latch;
+logic latch;
 logic is_latched;
 logic data_in, data_out;
 logic enable;
 logic old_sync, new_sync, old_data;
 
+execution_stage stage = READ_IDLE;
+execution_state state = STATE_IDLE;
+
+assign LLIO_TYPE = lljs_type;
+assign LLIO_BUTTONS = lljs_buttons;
+assign LLIO_ANALOG = lljs_analog;
+assign LLIO_EN = enable;
+
 always_comb begin
-	case (latch)
-		2'b00: begin
-			IO_LATCH <= 1'bZ;
-			IO_DATA <= 1'bZ;
-		end
-
-		2'b01: begin
-			IO_LATCH <= 1'b0;
-			IO_DATA <= data_out;
-		end
-
-		2'b10: begin
-			IO_LATCH <= 1'b1;
-			IO_DATA <= 1'b1;
-		end
-
-		default: begin
-			IO_LATCH <= 1'bZ;
-			IO_DATA <= 1'bZ;
-		end
-	endcase
+	if (latch) begin
+		IO_LATCH_OUT <= 1'b0;
+		IO_DATA_OUT <= data_out;
+	end else begin
+		IO_LATCH_OUT <= 1'b1;
+		IO_DATA_OUT <= 1'b1;
+	end
 end
 
 always_ff @(posedge CLK_50M) begin
@@ -216,9 +217,9 @@ always_ff @(posedge CLK_50M) begin
 	cycle <= cycle + 1'b1;
 
 	if (~latch) begin
-		is_latched <= ~IO_LATCH;
+		is_latched <= ~IO_LATCH_IN;
 		old_data <= data_in;
-		data_in <= IO_DATA;
+		data_in <= IO_DATA_IN;
 	end
 
 	if (~old_sync && new_sync) begin
@@ -230,33 +231,36 @@ always_ff @(posedge CLK_50M) begin
 		poll_counter <= poll_counter + 1'b1;
 	end
 
-	if (read_type == READ_POLL || read_type == READ_STATUS)
+	if (stage == READ_POLL || stage == READ_STATUS)
 		poll_offset <= poll_offset + 1'b1;
 
 	case (state)
 		STATE_IDLE: begin // Idle
-			latch <= (~enable && sync_counter > 'd4000) ? 2'b10 : 2'b00; // Assist weak pull up resistors put device in LL mode
 			if (is_latched) begin // remote device wants to talk
 				enable <= 1'b1;
 				cycle <= 0;
 				count <= 0;
 				read_byte <= 0;
-				state <= (read_type == READ_POLL) ? STATE_POLL : STATE_READ_START;
-			end else if (read_type == WRITE_STATUS) begin // We just got a poll result
-				cycle <= 0;
-				state <= STATE_WRITE_START;
-				read_type <= READ_STATUS;
-				read_length <= 'd13;
-				write_buffer <= LLIO_STATUS;
-			end else if (read_type == WRITE_MODES) begin
-				cycle <= 0;
-				read_type <= READ_MODES;
-				read_length <= 1'd1;
-				state <= STATE_WRITE_START;
-				write_buffer <= LLIO_GET_MODES;
+				state <= STATE_READ_START;
+			end else if (stage == WRITE_STATUS) begin // We just got a poll result
+				if (cycle > TIME_WAIT) begin
+					cycle <= 0;
+					state <= STATE_WRITE_START;
+					stage <= READ_STATUS;
+					read_length <= 'd13;
+					write_buffer <= {24'd0, LLIO_STATUS};
+				end
+			end else if (stage == WRITE_MODES) begin
+				if (cycle > TIME_WAIT) begin
+					cycle <= 0;
+					stage <= READ_MODES;
+					read_length <= 1'd1;
+					state <= STATE_WRITE_START;
+					write_buffer <= {24'd0, LLIO_GET_MODES};
+				end
 			end else if (sync_counter >= (((poll_offset < (poll_time >> 1)) && enable) ?
 				(poll_time - poll_offset) : poll_time)) begin // Trigger timed device poll. Offset can not be > half the poll time.
-				if (read_type != READ_IDLE) begin // IO timeout, device disconnect/defunct
+				if (stage != READ_IDLE) begin // IO timeout, device disconnect/defunct
 					enable <= 1'b0;
 					poll_offset <= 0;
 					poll_time <= TIME_POLL;
@@ -267,16 +271,17 @@ always_ff @(posedge CLK_50M) begin
 				poll_offset <= 0;
 				sync_counter <= 0;
 				cycle <= 0;
+				read_length <= 0;
 				state <= STATE_WRITE_START;
-				read_type <= READ_POLL;
-				write_buffer <= LLIO_POLL;
+				stage <= READ_POLL;
+				write_buffer <= {24'd0, LLIO_POLL};
 			end
 		end
 
 		STATE_WRITE_START: begin
 			if (cycle == 0) begin
 				data_out <= 1'b0; 
-				latch <= 2'b01; // Take control
+				latch <= 1'b1; // Take control
 				write_length <= 'h8; // Always 8 for now
 			end else if (cycle >= TIME_LEADIN) begin
 				cycle <= 0;
@@ -293,7 +298,7 @@ always_ff @(posedge CLK_50M) begin
 			end else if (cycle == TIME_BIT_H) begin // data half-bit
 				data_out <= ~write_buffer[0];
 				write_buffer <= {1'b0, write_buffer[31:1]};
-			end else if (cycle > (TIME_BIT_R + TIME_BIT_H)) begin
+			end else if (cycle >= (TIME_BIT_R + TIME_BIT_H)) begin
 				write_length <= write_length - 1'b1;
 				cycle <= 0;
 			end
@@ -305,19 +310,25 @@ always_ff @(posedge CLK_50M) begin
 			else if (cycle == TIME_SYNC_H)
 				data_out <= 1'b0;
 			else if (cycle == (TIME_SYNC_H + TIME_SYNC_L)) begin
-				latch <= 2'b10; // Bump latch and data to ensure proper sync
+				latch <= 1'b0; // Release
 			end else if (cycle >= (TIME_SYNC_H + TIME_SYNC_L + TIME_SETTLE)) begin
-				latch <= 2'b00;
 				state <= STATE_IDLE;
 				cycle <= 0;
 			end
 		end
 
 		STATE_READ_START: begin
-			if (cycle > TIME_LEADIN) begin
+			if (cycle >= TIME_SETTLE && ~is_latched) begin // Just a busy wait/poll/blip
 				cycle <= 0;
+				if (stage == READ_POLL) // If expecting a busy reply from poll, advance
+					stage <= WRITE_STATUS;
+				state <= STATE_IDLE;
+			end else if (count >= 'd10) begin // Allows for latch to be seen if both are released together
+				cycle <= 'd10;
 				read_bit <= 3'h0;
-				state <= STATE_READ; // Helps reduce noise and errors
+				state <= STATE_READ;
+			end else if (cycle >= TIME_LEADIN && data_in) begin // If we get data high it means we're reading
+				count <= count + 1'b1;
 			end
 		end
 
@@ -326,72 +337,54 @@ always_ff @(posedge CLK_50M) begin
 				((cycle > 'd25) && ~old_data && data_in)) begin // Re align during wait if needed
 				cycle <= 0;
 				read_bit <= 3'h0;
-				state <= STATE_READ;
+				state <= (read_byte >= read_length) ? STATE_READ_END : STATE_READ;
 			end
 		end
 
 		STATE_READ: begin
-			if (~is_latched) begin //XXX: Accounts from random "blip" on latch before data. Remove if possible.
+			if (~is_latched) begin // Accounts from random timing errors or unexpected events
 				cycle <= 0;
 				state <= STATE_IDLE;
 			end if (cycle == (TIME_BIT_H + (TIME_BIT_R >> 1))) begin // latch in the middle of the data window
 				read_buffer[read_byte][read_bit] <= ~data_in;
 				read_bit <= read_bit + 1'b1;
-			end else if (cycle > (TIME_BIT_H + TIME_BIT_R) ||
-				(cycle > TIME_BIT_H + 'd20 && ~old_data && data_in)) begin
-				//XXX: account for shorter low bit-halves, remove if able
+			end else if (cycle >= TIME_BIT_H + TIME_BIT_R) begin
 				cycle <= 0;
 				if (read_bit == 3'h0) begin // This relies on overflow behavior
 					if (read_byte == 0) begin
-						if (read_type == READ_STATUS) begin
+						if (stage == READ_STATUS) begin
 							lljs_type <= read_buffer[0];
-						end else if (read_type == READ_MODES) begin
+						end else if (stage == READ_MODES) begin
 							lljs_modes <= read_buffer[0];
 						end
 					end else if (read_byte == 'd3)
 						lljs_buttons[23:0] <= {read_buffer[3], read_buffer[2], read_buffer[1]};
-					else if (read_byte == 'd12)
+					else if (read_byte == 'd12) begin
 						lljs_analog[47:0] <=
 							{read_buffer[11], read_buffer[10], read_buffer[8],
 							read_buffer[7], read_buffer[5], read_buffer[4]};
-					if (read_byte >= read_length - 1'd1) begin
-						state <= STATE_READ_END;
-					end else begin
-						read_byte <= read_byte + 1'd1;
-						state <= STATE_READ_WAIT;
 					end
+					read_byte <= read_byte + 1'd1;
+					state <= STATE_READ_WAIT;
 				end
 			end
 		end
 
 		STATE_READ_END: begin
-			// latch data to correct registers based on read_type
-			if (cycle >= TIME_SETTLE + TIME_SYNC_H + TIME_SYNC_L) begin
-				if (read_type == READ_STATUS) begin
+			// latch data to correct registers based on stage
+			if (cycle >= TIME_WAIT) begin // bliss box holds the line low for about 3us after reply
+				if (stage == READ_STATUS) begin
 					if (lljs_modes[7]) begin
-						lljs_buttons[10] <= lljs_buttons[10] | (LLIO_ANALOG[15:8] < 'd97);
-						lljs_buttons[11] <= lljs_buttons[10] | (LLIO_ANALOG[15:8] > 'd157);
-						lljs_buttons[12] <= lljs_buttons[10] | (LLIO_ANALOG[7:0]  < 'd97);
-						lljs_buttons[13] <= lljs_buttons[10] | (LLIO_ANALOG[7:0]  > 'd157);
+						lljs_buttons[10] <= lljs_buttons[10] | (lljs_analog[15:8] < 'd50);
+						lljs_buttons[11] <= lljs_buttons[10] | (lljs_analog[15:8] > 'd200);
+						lljs_buttons[12] <= lljs_buttons[10] | (lljs_analog[7:0]  < 'd50);
+						lljs_buttons[13] <= lljs_buttons[10] | (lljs_analog[7:0]  > 'd200);
 					end
-					read_type <= READ_IDLE; //XXX: WRITE_MODES -- NYI;
+					stage <= WRITE_MODES;
 				end else begin
-					read_type <= READ_IDLE;
+					stage <= READ_IDLE;
 				end
 				cycle <= 0;
-				state <= STATE_IDLE;
-			end
-		end
-
-		STATE_POLL: begin // Polling hold timer
-			// Allow to settle, then idle while the device is polling the controller
-			if (cycle >= TIME_SETTLE && ~is_latched) begin
-				count <= count + 1'b1;
-			end
-			if (count > TIME_SETTLE) begin
-				cycle <= 0;
-				count <= 0;
-				read_type <= WRITE_STATUS;
 				state <= STATE_IDLE;
 			end
 		end
@@ -399,19 +392,19 @@ always_ff @(posedge CLK_50M) begin
 		default: begin
 			cycle <= 0;
 			count <= 0;
-			read_type <= READ_IDLE;
+			stage <= READ_IDLE;
 			state <= STATE_IDLE;
 		end
 	endcase
-	end else
-		latch <= 2'b00;
+	end else begin
+		latch <= 1'b0;
 		enable <= 1'b0;
 		lljs_analog <= 0;
 		lljs_buttons <= 0;
 		lljs_modes <= 0;
 		lljs_type <= 0;
 		state <= STATE_IDLE;
-		read_type <= READ_IDLE;
+		stage <= READ_IDLE;
 	end
 end
 
